@@ -1,4 +1,4 @@
-Dash Core staging tree 0.12.1
+Dash Core staging tree 0.12.1 + statistics logging
 ===============================
 
 `master:` [![Build Status](https://travis-ci.org/dashpay/dash.svg?branch=master)](https://travis-ci.org/dashpay/dash) `v0.12.0.x:` [![Build Status](https://travis-ci.org/dashpay/dash.svg?branch=v0.12.0.x)](https://travis-ci.org/dashpay/dash/branches) `v0.12.1.x:` [![Build Status](https://travis-ci.org/dashpay/dash.svg?branch=v0.12.1.x)](https://travis-ci.org/dashpay/dash/branches)
@@ -75,3 +75,20 @@ Translations are periodically pulled from Transifex and merged into the git repo
 pull from Transifex would automatically overwrite them again.
 
 Translators should also follow the [forum](https://www.dash.org/forum/topic/dash-worldwide-collaboration.88/).
+
+Stats
+-----
+Forked from Jlopps Statoshi
+
+Statoshi's changeset to Bitcoin Core is applied in the `master` branch and is
+built and tested after each merge from upstream or from a pull request. However,
+it not guaranteed to be completely stable. We do not recommend using Statoshi
+as a Bitcoin wallet.
+
+A guide for Statoshi developers is available [here](https://medium.com/@lopp/statoshi-developer-s-guide-241ac9ab9993#.s1rfi3fv6)
+
+A system metrics daemon is available [here](https://github.com/jlopp/bitcoin-utils/blob/master/systemMetricsDaemon.py)
+
+Dashstats also supports running multiple nodes that emit metrics to a single graphite instance.
+In order to facilitate this, you can add a line to bitcoin.conf that will partition each
+metric by the name of the host: statshostname=yourNodeName

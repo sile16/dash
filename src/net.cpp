@@ -1,4 +1,4 @@
-fixme1 // Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
 // Copyright (c) 2014-2017 The Dash Core developers
 // Distributed under the MIT software license, see the accompanying
@@ -456,6 +456,7 @@ void CNode::CloseSocketDisconnect()
     fDisconnect = true;
     if (hSocket != INVALID_SOCKET)
     {
+        statsClient.inc("peers.disconnect", 1.0f);
         LogPrint("net", "disconnecting peer=%d\n", id);
         CloseSocket(hSocket);
     }
@@ -1083,6 +1084,60 @@ void ThreadSocketHandler()
         if(vNodes.size() != nPrevNodeCount) {
             nPrevNodeCount = vNodes.size();
             uiInterface.NotifyNumConnectionsChanged(nPrevNodeCount);
+
+            // count various node attributes
+            int fullNodes = 0;
+            int spvNodes = 0;
+            int inboundNodes = 0;
+            int outboundNodes = 0;
+            int ipv4Nodes = 0;
+            int ipv6Nodes = 0;
+            int torNodes = 0;
+            mapMsgCmdSize mapRecvBytesMsgStats;
+            mapMsgCmdSize mapSentBytesMsgStats;
+            BOOST_FOREACH(const std::string &msg, getAllNetMessageTypes())
+            {
+                mapRecvBytesMsgStats[msg] = 0;
+                mapSentBytesMsgStats[msg] = 0;
+            }
+            mapRecvBytesMsgStats[NET_MESSAGE_COMMAND_OTHER] = 0;
+            mapSentBytesMsgStats[NET_MESSAGE_COMMAND_OTHER] = 0;
+            BOOST_FOREACH(CNode* pnode, vNodes)
+            {
+                BOOST_FOREACH(const mapMsgCmdSize::value_type &i, pnode->mapRecvBytesPerMsgCmd)
+                    mapRecvBytesMsgStats[i.first] += i.second;
+                BOOST_FOREACH(const mapMsgCmdSize::value_type &i, pnode->mapSendBytesPerMsgCmd)
+                    mapSentBytesMsgStats[i.first] += i.second;
+                if(pnode->fClient)
+                    spvNodes++;
+                else
+                    fullNodes++;
+                if(pnode->fInbound)
+                    inboundNodes++;
+                else
+                    outboundNodes++;
+                if(pnode->addr.IsIPv4())
+                    ipv4Nodes++;
+                if(pnode->addr.IsIPv6())
+                    ipv6Nodes++;
+                if(pnode->addr.IsTor())
+                    torNodes++;
+                if(pnode->nPingUsecTime > 0)
+                    statsClient.timing("peers.ping_us", pnode->nPingUsecTime, 1.0f);
+            }
+            BOOST_FOREACH(const std::string &msg, getAllNetMessageTypes())
+            {
+                statsClient.gauge("bandwidth.message." + msg + ".totalBytesReceived", mapRecvBytesMsgStats[msg], 1.0f);
+                statsClient.gauge("bandwidth.message." + msg + ".totalBytesSent", mapSentBytesMsgStats[msg], 1.0f);
+            }
+            statsClient.gauge("peers.totalConnections", nPrevNodeCount, 1.0f);
+            statsClient.gauge("peers.spvNodeConnections", spvNodes, 1.0f);
+            statsClient.gauge("peers.fullNodeConnections", fullNodes, 1.0f);
+            statsClient.gauge("peers.inboundConnections", inboundNodes, 1.0f);
+            statsClient.gauge("peers.outboundConnections", outboundNodes, 1.0f);
+            statsClient.gauge("peers.ipv4Connections", ipv4Nodes, 1.0f);
+            statsClient.gauge("peers.ipv6Connections", ipv6Nodes, 1.0f);
+            statsClient.gauge("peers.torConnections", torNodes, 1.0f);
         }
 
         //
@@ -2144,12 +2199,16 @@ void CNode::RecordBytesRecv(uint64_t bytes)
 {
     LOCK(cs_totalBytesRecv);
     nTotalBytesRecv += bytes;
+    statsClient.count("bandwidth.bytesReceived", bytes, 0.1f);
+    statsClient.gauge("bandwidth.totalBytesReceived", nTotalBytesRecv, 0.01f);
 }
 
 void CNode::RecordBytesSent(uint64_t bytes)
 {
     LOCK(cs_totalBytesSent);
     nTotalBytesSent += bytes;
+    statsClient.count("bandwidth.bytesSent", bytes, 0.01f);
+    statsClient.gauge("bandwidth.totalBytesSent", nTotalBytesSent, 0.01f);
 
     uint64_t now = GetTime();
     if (nMaxOutboundCycleStartTime + nMaxOutboundTimeframe < now)
@@ -2520,6 +2579,7 @@ void CNode::BeginMessage(const char* pszCommand) EXCLUSIVE_LOCK_FUNCTION(cs_vSen
     assert(ssSend.size() == 0);
     ssSend << CMessageHeader(Params().MessageStart(), pszCommand, 0);
     LogPrint("net", "sending: %s ", SanitizeString(pszCommand));
+    statsClient.inc("message.sent." + std::string(pszCommand), 1.0f);
 }
 
 void CNode::AbortMessage() UNLOCK_FUNCTION(cs_vSend)
@@ -2553,6 +2613,10 @@ void CNode::EndMessage() UNLOCK_FUNCTION(cs_vSend)
     // Set the size
     unsigned int nSize = ssSend.size() - CMessageHeader::HEADER_SIZE;
     WriteLE32((uint8_t*)&ssSend[CMessageHeader::MESSAGE_SIZE_OFFSET], nSize);
+
+    //log total amount of bytes per command
+    mapSendBytesPerMsgCmd[std::string(pszCommand)] += nSize + CMessageHeader::HEADER_SIZE;
+    statsClient.count("bandwidth.message." + std::string(pszCommand) + ".bytesSent", nSize + CMessageHeader::HEADER_SIZE, 1.0f);
 
     // Set the checksum
     uint256 hash = Hash(ssSend.begin() + CMessageHeader::HEADER_SIZE, ssSend.end());
