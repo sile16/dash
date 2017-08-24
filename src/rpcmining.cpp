@@ -272,6 +272,8 @@ UniValue getmininginfo(const UniValue& params, bool fHelp)
     obj.push_back(Pair("testnet",          Params().TestnetToBeDeprecatedFieldRPC()));
     obj.push_back(Pair("chain",            Params().NetworkIDString()));
     obj.push_back(Pair("generate",         getgenerate(params, false)));
+    statsClient.gauge("network.hashesPerSecond", getnetworkhashps(params, false).get_real());
+    statsClient.gauge("network.difficulty", (double)GetDifficulty());
     return obj;
 }
 

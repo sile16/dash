@@ -1,4 +1,4 @@
-// Copyright (c) 2009-2010 Satoshi Nakamoto
+fixme2 fixme2 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2015 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -6,6 +6,7 @@
 #ifndef BITCOIN_NET_H
 #define BITCOIN_NET_H
 
+#include "amount.h"
 #include "bloom.h"
 #include "compat.h"
 #include "limitedmap.h"
@@ -15,8 +16,8 @@
 #include "streams.h"
 #include "sync.h"
 #include "uint256.h"
-#include "util.h"
 
+#include <atomic>
 #include <deque>
 #include <stdint.h>
 
@@ -27,6 +28,8 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/foreach.hpp>
 #include <boost/signals2/signal.hpp>
+
+#include "statsd_client.h"
 
 class CAddrMan;
 class CScheduler;
@@ -40,14 +43,12 @@ namespace boost {
 static const int PING_INTERVAL = 2 * 60;
 /** Time after which to disconnect, after waiting for a ping response (or inactivity). */
 static const int TIMEOUT_INTERVAL = 20 * 60;
-/** Minimum time between warnings printed to log. */
-static const int WARNING_INTERVAL = 10 * 60;
 /** The maximum number of entries in an 'inv' protocol message */
 static const unsigned int MAX_INV_SZ = 50000;
 /** The maximum number of new addresses to accumulate before announcing. */
 static const unsigned int MAX_ADDR_TO_SEND = 1000;
-/** Maximum length of incoming protocol messages (no message over 2 MiB is currently acceptable). */
-static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 2 * 1024 * 1024;
+/** Maximum length of incoming protocol messages (no message over 4 MB is currently acceptable). */
+static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 4 * 1000 * 1000;
 /** Maximum length of strSubVer in `version` message */
 static const unsigned int MAX_SUBVERSION_LENGTH = 256;
 /** -listen default */
@@ -73,11 +74,15 @@ static const bool DEFAULT_FORCEDNSSEED = false;
 static const size_t DEFAULT_MAXRECEIVEBUFFER = 5 * 1000;
 static const size_t DEFAULT_MAXSENDBUFFER    = 1 * 1000;
 
+static const ServiceFlags REQUIRED_SERVICES = NODE_NETWORK;
+
 // NOTE: When adjusting this, update rpcnet:setban's help ("24h")
 static const unsigned int DEFAULT_MISBEHAVING_BANTIME = 60 * 60 * 24;  // Default 24-hour ban
 
 unsigned int ReceiveFloodSize();
 unsigned int SendBufferSize();
+
+typedef int NodeId;
 
 void AddOneShot(const std::string& strDest);
 void AddressCurrentlyConnected(const CService& addr);
@@ -85,18 +90,14 @@ CNode* FindNode(const CNetAddr& ip);
 CNode* FindNode(const CSubNet& subNet);
 CNode* FindNode(const std::string& addrName);
 CNode* FindNode(const CService& ip);
-// fConnectToMasternode should be 'true' only if you want this node to allow to connect to itself
-// and/or you want it to be disconnected on CMasternodeMan::ProcessMasternodeConnections()
-CNode* ConnectNode(CAddress addrConnect, const char *pszDest = NULL, bool fConnectToMasternode = false);
-bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
+CNode* FindNode(const NodeId id); //TODO: Remove this
+bool OpenNetworkConnection(const CAddress& addrConnect, bool fCountFailure, CSemaphoreGrant *grantOutbound = NULL, const char *strDest = NULL, bool fOneShot = false);
 void MapPort(bool fUseUPnP);
 unsigned short GetListenPort();
 bool BindListenPort(const CService &bindAddr, std::string& strError, bool fWhitelisted = false);
 void StartNode(boost::thread_group& threadGroup, CScheduler& scheduler);
 bool StopNode();
 void SocketSendData(CNode *pnode);
-
-typedef int NodeId;
 
 struct CombinerAll
 {
@@ -154,9 +155,12 @@ bool IsReachable(const CNetAddr &addr);
 CAddress GetLocalAddress(const CNetAddr *paddrPeer = NULL);
 
 
+extern statsd::StatsdClient statsClient;
 extern bool fDiscover;
 extern bool fListen;
-extern uint64_t nLocalServices;
+extern ServiceFlags nLocalServices;
+extern ServiceFlags nRelevantServices;
+extern bool fRelayTxes;
 extern uint64_t nLocalHostNonce;
 extern CAddrMan addrman;
 
@@ -165,9 +169,6 @@ extern int nMaxConnections;
 
 extern std::vector<CNode*> vNodes;
 extern CCriticalSection cs_vNodes;
-extern std::map<CInv, CDataStream> mapRelay;
-extern std::deque<std::pair<int64_t, CInv> > vRelayExpiration;
-extern CCriticalSection cs_mapRelay;
 extern limitedmap<uint256, int64_t> mapAlreadyAskedFor;
 
 extern std::vector<std::string> vAddedNodes;
@@ -186,12 +187,13 @@ struct LocalServiceInfo {
 
 extern CCriticalSection cs_mapLocalHost;
 extern std::map<CNetAddr, LocalServiceInfo> mapLocalHost;
+typedef std::map<std::string, uint64_t> mapMsgCmdSize; //command, total bytes
 
 class CNodeStats
 {
 public:
     NodeId nodeid;
-    uint64_t nServices;
+    ServiceFlags nServices;
     bool fRelayTxes;
     int64_t nLastSend;
     int64_t nLastRecv;
@@ -203,7 +205,9 @@ public:
     bool fInbound;
     int nStartingHeight;
     uint64_t nSendBytes;
+    mapMsgCmdSize mapSendBytesPerMsgCmd;
     uint64_t nRecvBytes;
+    mapMsgCmdSize mapRecvBytesPerMsgCmd;
     bool fWhitelisted;
     double dPingTime;
     double dPingWait;
@@ -319,7 +323,8 @@ class CNode
 {
 public:
     // socket
-    uint64_t nServices;
+    ServiceFlags nServices;
+    ServiceFlags nServicesExpected;
     SOCKET hSocket;
     CDataStream ssSend;
     size_t nSendSize; // total size of all vSendMsg entries
@@ -338,11 +343,9 @@ public:
     int64_t nLastRecv;
     int64_t nTimeConnected;
     int64_t nTimeOffset;
-    int64_t nLastWarningTime;
-    CAddress addr;
+    const CAddress addr;
     std::string addrName;
     CService addrLocal;
-    int nNumWarningsSkipped;
     int nVersion;
     // strSubVer is whatever byte array we read from the wire. However, this field is intended
     // to be printed out, displayed to humans in various forms and so on. So we sanitize it and
@@ -360,15 +363,15 @@ public:
     // a) it allows us to not relay tx invs before receiving the peer's version message
     // b) the peer may tell us in its version message that we should not relay tx invs
     //    unless it loads a bloom filter.
-    bool fRelayTxes;
-    // If 'true' this node will be disconnected on CMasternodeMan::ProcessMasternodeConnections()
-    bool fMasternode;
+    bool fRelayTxes; //protected by cs_filter
+    bool fSentAddr;
     CSemaphoreGrant grantOutbound;
-    CSemaphoreGrant grantMasternodeOutbound;
     CCriticalSection cs_filter;
     CBloomFilter* pfilter;
     int nRefCount;
     NodeId id;
+
+    const uint64_t nKeyedNetGroup;
 protected:
 
     // Denial-of-service detection/prevention
@@ -386,6 +389,9 @@ protected:
     void Fuzz(int nChance); // modifies ssSend
 
 public:
+    mapMsgCmdSize mapSendBytesPerMsgCmd;
+    mapMsgCmdSize mapRecvBytesPerMsgCmd;
+
     uint256 hashContinue;
     int nStartingHeight;
 
@@ -399,7 +405,13 @@ public:
 
     // inventory based relay
     CRollingBloomFilter filterInventoryKnown;
-    std::vector<CInv> vInventoryToSend;
+    // Set of transaction ids we still have to announce.
+    // They are sorted by the mempool before relay, so the order is not important.
+    std::set<uint256> setInventoryTxToSend;
+    // List of block ids we still have announce.
+    // There is no final sorting before sending, as they are always sent immediately
+    // and in the order requested.
+    std::vector<uint256> vInventoryBlockToSend;
     CCriticalSection cs_inventory;
     std::set<uint256> setAskFor;
     std::multimap<int64_t, CInv> mapAskFor;
@@ -407,6 +419,15 @@ public:
     // Used for headers announcements - unfiltered blocks to relay
     // Also protected by cs_inventory
     std::vector<uint256> vBlockHashesToAnnounce;
+    // Used for BIP35 mempool sending, also protected by cs_inventory
+    bool fSendMempool;
+
+    // Last time a "MEMPOOL" request was serviced.
+    std::atomic<int64_t> timeLastMempoolReq;
+
+    // Block and TXN accept times
+    std::atomic<int64_t> nLastBlockTime;
+    std::atomic<int64_t> nLastTXTime;
 
     // Ping time measurement:
     // The pong reply we're expecting, or 0 if no pong expected.
@@ -419,10 +440,13 @@ public:
     int64_t nMinPingUsecTime;
     // Whether a ping is requested.
     bool fPingQueued;
+    // Minimum fee rate with which to filter inv's to this node
+    CAmount minFeeFilter;
+    CCriticalSection cs_feeFilter;
+    CAmount lastSentFeeFilter;
+    int64_t nextSendTimeFeeFilter;
 
-    std::vector<unsigned char> vchKeyedNetGroup;
-
-    CNode(SOCKET hSocketIn, const CAddress &addrIn, const std::string &addrNameIn = "", bool fInboundIn = false, bool fNetworkNodeIn = false);
+    CNode(SOCKET hSocketIn, const CAddress &addrIn, const std::string &addrNameIn = "", bool fInboundIn = false);
     ~CNode();
 
 private:
@@ -438,13 +462,10 @@ private:
     static uint64_t nMaxOutboundLimit;
     static uint64_t nMaxOutboundTimeframe;
 
-    // Secret key for computing keyed net groups
-    static std::vector<unsigned char> vchSecretKey;
-
-    CCriticalSection cs_nRefCount;
-
     CNode(const CNode&);
     void operator=(const CNode&);
+
+    static uint64_t CalculateKeyedNetGroup(const CAddress& ad);
 
 public:
 
@@ -454,7 +475,6 @@ public:
 
     int GetRefCount()
     {
-        LOCK(cs_nRefCount);
         assert(nRefCount >= 0);
         return nRefCount;
     }
@@ -481,16 +501,13 @@ public:
 
     CNode* AddRef()
     {
-        LOCK(cs_nRefCount);
         nRefCount++;
         return this;
     }
 
     void Release()
     {
-        LOCK(cs_nRefCount);
         nRefCount--;
-        assert(nRefCount >= 0);
     }
 
 
@@ -525,14 +542,13 @@ public:
 
     void PushInventory(const CInv& inv)
     {
-        {
-            LOCK(cs_inventory);
-            if (inv.type == MSG_TX && filterInventoryKnown.contains(inv.hash)) {
-                LogPrint("net", "PushInventory --  filtered inv: %s peer=%d\n", inv.ToString(), id);
-                return;
+        LOCK(cs_inventory);
+        if (inv.type == MSG_TX) {
+            if (!filterInventoryKnown.contains(inv.hash)) {
+                setInventoryTxToSend.insert(inv.hash);
             }
-            LogPrint("net", "PushInventory --  inv: %s peer=%d\n", inv.ToString(), id);
-            vInventoryToSend.push_back(inv);
+        } else if (inv.type == MSG_BLOCK) {
+            vInventoryBlockToSend.push_back(inv.hash);
         }
     }
 
@@ -551,17 +567,37 @@ public:
     void AbortMessage() UNLOCK_FUNCTION(cs_vSend);
 
     // TODO: Document the precondition of this function.  Is cs_vSend locked?
-    void EndMessage() UNLOCK_FUNCTION(cs_vSend);
+    void EndMessage(const char* pszCommand) UNLOCK_FUNCTION(cs_vSend);
 
     void PushVersion();
 
-
+    std::string RejectCodeToString(const char& code)
+    {
+        if (code == 0x01)
+            return "malformed";
+        if (code == 0x10)
+            return "invalid";
+        if (code == 0x11)
+            return "obsolete";
+        if (code == 0x12)
+            return "duplicate";
+        if (code == 0x40)
+            return "nonstandard";
+        if (code == 0x41)
+            return "dust";
+        if (code == 0x42)
+            return "insufficientfee";
+        if (code == 0x43)
+            return "checkpoint";
+        return "";
+    }
+    
     void PushMessage(const char* pszCommand)
     {
         try
         {
             BeginMessage(pszCommand);
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -577,7 +613,24 @@ public:
         {
             BeginMessage(pszCommand);
             ssSend << a1;
-            EndMessage();
+            EndMessage(pszCommand);
+        }
+        catch (...)
+        {
+            AbortMessage();
+            throw;
+        }
+    }
+
+    /** Send a message containing a1, serialized with flag flag. */
+    template<typename T1>
+    void PushMessageWithFlag(int flag, const char* pszCommand, const T1& a1)
+    {
+        try
+        {
+            BeginMessage(pszCommand);
+            WithOrVersion(&ssSend, flag) << a1;
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -593,7 +646,7 @@ public:
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -605,11 +658,13 @@ public:
     template<typename T1, typename T2, typename T3>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -621,11 +676,13 @@ public:
     template<typename T1, typename T2, typename T3, typename T4>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -637,11 +694,13 @@ public:
     template<typename T1, typename T2, typename T3, typename T4, typename T5>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4 << a5;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -653,11 +712,13 @@ public:
     template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4 << a5 << a6;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -669,11 +730,13 @@ public:
     template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -685,11 +748,13 @@ public:
     template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8>
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7, const T8& a8)
     {
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7 << a8;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -705,55 +770,7 @@ public:
         {
             BeginMessage(pszCommand);
             ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7 << a8 << a9;
-            EndMessage();
-        }
-        catch (...)
-        {
-            AbortMessage();
-            throw;
-        }
-    }
- 
-    template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9, typename T10>
-    void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7, const T8& a8, const T9& a9, const T10& a10)
-    {
-        try
-        {
-            BeginMessage(pszCommand);
-            ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7 << a8 << a9 << a10;
-            EndMessage();
-        }
-        catch (...)
-        {
-            AbortMessage();
-            throw;
-        }
-    }
-
-    template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9, typename T10, typename T11>
-    void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7, const T8& a8, const T9& a9, const T10& a10, const T11& a11)
-    {
-        try
-        {
-            BeginMessage(pszCommand);
-            ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7 << a8 << a9 << a10 << a11;
-            EndMessage();
-        }
-        catch (...)
-        {
-            AbortMessage();
-            throw;
-        }
-    }
-
-    template<typename T1, typename T2, typename T3, typename T4, typename T5, typename T6, typename T7, typename T8, typename T9, typename T10, typename T11, typename T12>
-    void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7, const T8& a8, const T9& a9, const T10& a10, const T11& a11, const T12& a12)
-    {
-        try
-        {
-            BeginMessage(pszCommand);
-            ssSend << a1 << a2 << a3 << a4 << a5 << a6 << a7 << a8 << a9 << a10 << a11 << a12;
-            EndMessage();
+            EndMessage(pszCommand);
         }
         catch (...)
         {
@@ -827,20 +844,12 @@ public:
     //!response the time in second left in the current max outbound cycle
     // in case of no limit, it will always response 0
     static uint64_t GetMaxOutboundTimeLeftInCycle();
-
-    static std::vector<unsigned char> CalculateKeyedNetGroup(CAddress& address);
 };
 
-class CExplicitNetCleanup
-{
-public:
-    static void callCleanup();
-};
+
 
 class CTransaction;
 void RelayTransaction(const CTransaction& tx);
-void RelayTransaction(const CTransaction& tx, const CDataStream& ss);
-void RelayInv(CInv &inv, const int minProtoVersion = MIN_PEER_PROTO_VERSION);
 
 /** Access to the (IP) address database (peers.dat) */
 class CAddrDB
@@ -851,6 +860,7 @@ public:
     CAddrDB();
     bool Write(const CAddrMan& addr);
     bool Read(CAddrMan& addr);
+    bool Read(CAddrMan& addr, CDataStream& ssPeers);
 };
 
 /** Access to the banlist database (banlist.dat) */
@@ -864,13 +874,17 @@ public:
     bool Read(banmap_t& banSet);
 };
 
-void DumpBanlist();
-
 /** Return a timestamp in the future (in microseconds) for exponentially distributed events. */
 int64_t PoissonNextSend(int64_t nNow, int average_interval_seconds);
 
-std::vector<CNode*> CopyNodeVector();
+struct AddedNodeInfo
+{
+    std::string strAddedNode;
+    CService resolvedAddress;
+    bool fConnected;
+    bool fInbound;
+};
 
-void ReleaseNodeVector(const std::vector<CNode*>& vecNodes);
+std::vector<AddedNodeInfo> GetAddedNodeInfo();
 
 #endif // BITCOIN_NET_H
