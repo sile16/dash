@@ -704,6 +704,8 @@ bool CNode::ReceiveMsgBytes(const char *pch, unsigned int nBytes)
         if (msg.complete()) {
             msg.nTime = GetTimeMicros();
             messageHandlerCondition.notify_one();
+            statsClient.count("bandwidth.message." + std::string(msg.hdr.pchCommand) + ".bytesReceived", msg.hdr.nMessageSize + CMessageHeader::HEADER_SIZE, 1.0f);
+
         }
     }
 
@@ -1100,8 +1102,6 @@ void ThreadSocketHandler()
                 mapRecvBytesMsgStats[msg] = 0;
                 mapSentBytesMsgStats[msg] = 0;
             }
-            mapRecvBytesMsgStats[NET_MESSAGE_COMMAND_OTHER] = 0;
-            mapSentBytesMsgStats[NET_MESSAGE_COMMAND_OTHER] = 0;
             BOOST_FOREACH(CNode* pnode, vNodes)
             {
                 BOOST_FOREACH(const mapMsgCmdSize::value_type &i, pnode->mapRecvBytesPerMsgCmd)
@@ -2615,8 +2615,7 @@ void CNode::EndMessage() UNLOCK_FUNCTION(cs_vSend)
     WriteLE32((uint8_t*)&ssSend[CMessageHeader::MESSAGE_SIZE_OFFSET], nSize);
 
     //log total amount of bytes per command
-    mapSendBytesPerMsgCmd[std::string(pszCommand)] += nSize + CMessageHeader::HEADER_SIZE;
-    statsClient.count("bandwidth.message." + std::string(pszCommand) + ".bytesSent", nSize + CMessageHeader::HEADER_SIZE, 1.0f);
+    statsClient.count("bandwidth.message.bytesSent", nSize + CMessageHeader::HEADER_SIZE, 1.0f);
 
     // Set the checksum
     uint256 hash = Hash(ssSend.begin() + CMessageHeader::HEADER_SIZE, ssSend.end());

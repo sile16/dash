@@ -663,7 +663,6 @@ void static EraseOrphanTx(uint256 hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
     }
     mapOrphanTransactions.erase(it);
     statsClient.inc("transactions.orphans.remove", 1.0f);
-    return 1;
 }
 
 void EraseOrphansFor(NodeId peer)
@@ -1077,7 +1076,6 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState &state, const C
                               std::vector<uint256>& vHashTxnToUncache, bool fDryRun)
 {
     boost::posix_time::ptime start = boost::posix_time::microsec_clock::local_time();
-    const uint256 hash = tx.GetHash();
     AssertLockHeld(cs_main);
     if (pfMissingInputs)
         *pfMissingInputs = false;
@@ -1114,6 +1112,7 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState &state, const C
     {
         statsClient.inc("transactions.duplicate", 1.0f);
         return state.Invalid(false, REJECT_ALREADY_KNOWN, "txn-already-in-mempool");
+    }
 
     // If this is a Transaction Lock Request check to see if it's valid
     if(instantsend.HasTxLockRequest(hash) && !CTxLockRequest(tx).IsValid())
@@ -1520,7 +1519,6 @@ bool AcceptToMemoryPoolWorker(CTxMemPool& pool, CValidationState &state, const C
         statsClient.count("transactions.fees", nFees, 1.0f);
         statsClient.count("transactions.inputValue", nValueIn, 1.0f);
         statsClient.count("transactions.outputValue", nValueOut, 1.0f);
-        statsClient.count("transactions.sigOps", nSigOpsCost, 1.0f);
         statsClient.count("transactions.priority", dPriority, 1.0f);
 
         // Add memory address index
@@ -5353,6 +5351,8 @@ void static ProcessGetData(CNode* pfrom, const Consensus::Params& consensusParam
 
 bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, int64_t nTimeReceived)
 {
+    statsClient.inc("message.received." + strCommand, 1.0f);
+
     const CChainParams& chainparams = Params();
     RandAddSeedPerfmon();
     LogPrint("net", "received: %s (%u bytes) peer=%d\n", SanitizeString(strCommand), vRecv.size(), pfrom->id);
@@ -5639,6 +5639,14 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv, 
                 LogPrint("net", "got inv of unknown type %d: %s peer=%d\n", inv.type, inv.hash.ToString(), pfrom->id);
                 continue;
             }
+
+            //MattR is this right? are we really in an invalid state ?
+            if (inv.type == MSG_TX)
+                statsClient.inc("message.received.inv_tx", 1.0f);
+            else if (inv.type == MSG_BLOCK)
+                statsClient.inc("message.received.inv_block", 1.0f);
+
+
 
             boost::this_thread::interruption_point();
             pfrom->AddInventoryKnown(inv);
