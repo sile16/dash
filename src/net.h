@@ -29,6 +29,7 @@
 #include <boost/filesystem/path.hpp>
 #include <boost/foreach.hpp>
 #include <boost/signals2/signal.hpp>
+#include <boost/lexical_cast.hpp>
 
 #include "statsd_client.h"
 
@@ -639,7 +640,7 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3)
     {
         if (std::string(pszCommand) == "reject")
-            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
@@ -657,7 +658,7 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4)
     {
         if (std::string(pszCommand) == "reject")
-            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
@@ -675,8 +676,8 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5)
     {
     //    MattR  why is this causing compile fail?
-    //    if (std::string(pszCommand) == "reject")
-    //        statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+        if (std::string(pszCommand) == "reject")
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
@@ -694,7 +695,7 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6)
     {
         if (std::string(pszCommand) == "reject")
-            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
@@ -712,7 +713,7 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7)
     {
         if (std::string(pszCommand) == "reject")
-            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);
@@ -730,7 +731,7 @@ public:
     void PushMessage(const char* pszCommand, const T1& a1, const T2& a2, const T3& a3, const T4& a4, const T5& a5, const T6& a6, const T7& a7, const T8& a8)
     {
         if (std::string(pszCommand) == "reject")
-            statsClient.inc("message.sent.reject_" + std::string(a1) + "_" + RejectCodeToString(a2), 1.0f);
+            statsClient.inc("message.sent.reject_" + boost::lexical_cast<std::string>(a1) + "_" + RejectCodeToString(a2), 1.0f);
         try
         {
             BeginMessage(pszCommand);

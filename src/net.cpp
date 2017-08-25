@@ -440,6 +440,7 @@ CNode* ConnectNode(CAddress addrConnect, const char *pszDest, bool fConnectToMas
 
         LOCK(cs_vNodes);
         vNodes.push_back(pnode);
+        statsClient.inc("peers.connect", 1.0f);
 
         return pnode;
     } else if (!proxyConnectionFailed) {
