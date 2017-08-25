@@ -9,6 +9,7 @@
 #include "amount.h"
 #include "bloom.h"
 #include "compat.h"
+#include "init.h"
 #include "limitedmap.h"
 #include "netbase.h"
 #include "protocol.h"
@@ -30,8 +31,6 @@
 #include <boost/foreach.hpp>
 #include <boost/signals2/signal.hpp>
 #include <boost/lexical_cast.hpp>
-
-#include "statsd_client.h"
 
 class CAddrMan;
 class CScheduler;
@@ -159,7 +158,6 @@ bool IsReachable(const CNetAddr &addr);
 CAddress GetLocalAddress(const CNetAddr *paddrPeer = NULL);
 
 
-extern statsd::StatsdClient statsClient;
 extern bool fDiscover;
 extern bool fListen;
 extern uint64_t nLocalServices;
